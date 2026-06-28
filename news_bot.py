@@ -7,10 +7,7 @@ import re
 import os
 import sys
 from datetime import datetime, timezone, timedelta
-from flask import Flask
-import threading
-from telegram import Update
-from telegram.ext import Application, MessageHandler, filters, ContextTypes
+from flask import Flask, request
 
 # ═══════════════════════════════════════════════════════════
 #  ⚙️  تنظیمات اصلی
@@ -22,7 +19,7 @@ TELEGRAM_API_BASE  = "https://morning-tooth-e39a.mortzapakdel85.workers.dev"
 SENT_CACHE_FILE    = "sent_news.json"
 
 # ═══════════════════════════════════════════════════════════
-#  🌐  سرور وب (برای Render)
+#  🌐  سرور Flask (برای Webhook + بیدار نگه‌داشتن)
 # ═══════════════════════════════════════════════════════════
 app = Flask(__name__)
 
@@ -30,62 +27,53 @@ app = Flask(__name__)
 def home():
     return "Gold News Bot is running!"
 
-def run_flask():
-    app.run(host='0.0.0.0', port=10000)
-
-# ═══════════════════════════════════════════════════════════
-#  💬  گفتگو با هوش مصنوعی
-# ═══════════════════════════════════════════════════════════
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """پاسخ به پیام‌های کاربر با هوش مصنوعی"""
-    user_message = update.message.text
-    chat_id = update.effective_chat.id
-
-    # فقط به پیام‌های خودت پاسخ بده
-    if str(chat_id) != TELEGRAM_CHAT_ID:
-        await update.message.reply_text("⛔ شما دسترسی ندارید.")
-        return
-
-    if not user_message:
-        await update.message.reply_text("لطفاً یک متن بنویسید.")
-        return
-
-    # ساخت پرامپت برای هوش مصنوعی
-    prompt = f"""
-    تو یک دستیار تحلیلگر حرفه‌ای بازار طلا (XAUUSD) هستی.
-    کاربر سوالی پرسیده یا درخواست تحلیل داده است.
-    با توجه به دانش اقتصادی و بازار طلا، پاسخ بده.
-
-    سوال کاربر:
-    {user_message}
-
-    پاسخ باید:
-    - به فارسی باشد
-    - مختصر و مفید باشد
-    - در حد ۳ تا ۵ جمله
-    - اگر مربوط به طلاست، جهت صعودی/نزولی رو مشخص کن
-    """
-
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    """دریافت پیام از تلگرام و پاسخ دادن"""
     try:
+        data = request.get_json()
+        if not data or 'message' not in data:
+            return "OK", 200
+            
+        chat_id = data['message']['chat']['id']
+        user_message = data['message'].get('text', '')
+
+        # فقط به پیام‌های خودت پاسخ بده
+        if str(chat_id) != TELEGRAM_CHAT_ID:
+            return "OK", 200
+
+        if not user_message:
+            return "OK", 200
+
+        # ساخت پرامپت برای هوش مصنوعی
+        prompt = f"""
+        تو یک دستیار تحلیلگر حرفه‌ای بازار طلا (XAUUSD) هستی.
+        سوال کاربر: {user_message}
+        پاسخ مختصر، مفید و به فارسی، در حد ۳ تا ۵ جمله.
+        """
+
         response = call_ai(prompt, max_tokens=2000)
         if response:
-            await update.message.reply_text(response)
+            send_telegram_response(chat_id, response)
         else:
-            await update.message.reply_text("❌ خطا در ارتباط با هوش مصنوعی. لطفاً دوباره تلاش کن.")
-    except Exception as e:
-        await update.message.reply_text(f"❌ خطا: {str(e)}")
+            send_telegram_response(chat_id, "❌ خطا در ارتباط با هوش مصنوعی.")
 
-def run_telegram_bot():
-    """اجرای ربات در حالت Polling برای دریافت پیام‌ها"""
-    try:
-        # ساخت Application با نسخه ۲۰
-        telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-        telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-        print("🤖 ربات گفتگو روشن شد!")
-        telegram_app.run_polling()
+        return "OK", 200
     except Exception as e:
-        print(f"⚠️ خطا در اجرای گفتگو: {e}")
+        print(f"⚠️ خطا در Webhook: {e}")
+        return "OK", 200
+
+def send_telegram_response(chat_id, text):
+    """ارسال پاسخ به تلگرام از طریق Worker"""
+    url = f"{TELEGRAM_API_BASE}/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    try:
+        requests.post(url, json={
+            'chat_id': chat_id,
+            'text': text,
+            'parse_mode': 'HTML'
+        }, timeout=10)
+    except Exception as e:
+        print(f"❌ خطا در ارسال پاسخ: {e}")
 
 # ═══════════════════════════════════════════════════════════
 #  🧠  پرامپت اخبار
@@ -561,25 +549,24 @@ def run():
         print("  ❌  ارسال ناموفق.")
 
 # ═══════════════════════════════════════════════════════════
-#  🚀  نقطه شروع (اجرای همزمان Flask + Polling + Schedule)
+#  🚀  نقطه شروع (تنظیم Webhook و اجرای Flask)
 # ═══════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    # ۱. اجرای Flask برای Render (بیدار نگه‌داشتن)
-    flask_thread = threading.Thread(target=run_flask)
-    flask_thread.daemon = True
-    flask_thread.start()
-    
-    # ۲. اجرای ربات گفتگو در یک ترد جداگانه
-    bot_thread = threading.Thread(target=run_telegram_bot)
-    bot_thread.daemon = True
-    bot_thread.start()
-    
-    # ۳. اجرای ربات اصلی (ارسال خودکار اخبار)
     print("=" * 45)
-    print("   🤖  ربات اخبار طلا — نسخه گفتگو (۴ ساعته)")
+    print("   🤖  ربات اخبار طلا — نسخه نهایی (Webhook)")
     print("=" * 45)
     print("🐍 Python version:", sys.version)
+
+    # تنظیم Webhook برای دریافت پیام‌ها
+    webhook_url = "https://gold-news-bot-rwg4.onrender.com/webhook"
+    set_webhook_url = f"{TELEGRAM_API_BASE}/bot{TELEGRAM_BOT_TOKEN}/setWebhook?url={webhook_url}"
+    
+    try:
+        response = requests.get(set_webhook_url)
+        print("✅ Webhook تنظیم شد:", response.json())
+    except Exception as e:
+        print(f"⚠️ خطا در تنظیم Webhook: {e}")
 
     # اجرای اولیه
     run()
@@ -589,12 +576,7 @@ if __name__ == "__main__":
 
     print("\n⏰  هر ۴ ساعت یک‌بار | Ctrl+C برای خروج\n")
     print("🟢 ربات در حال اجراست...")
-    print("💬 می‌توانید در تلگرام سوال بپرسید.")
+    print("💬 می‌توانید در تلگرام سوال بپرسید (Webhook فعال است).")
 
-    # حلقه بی‌نهایت برای نگه‌داشتن ربات روشن
-    try:
-        while True:
-            schedule.run_pending()
-            time.sleep(30)
-    except KeyboardInterrupt:
-        print("\n🛑 ربات متوقف شد.")
+    # اجرای Flask در ترد اصلی (برای Webhook)
+    app.run(host='0.0.0.0', port=10000)
