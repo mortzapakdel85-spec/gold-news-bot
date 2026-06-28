@@ -6,6 +6,8 @@ import json
 import re
 import os
 from datetime import datetime, timezone, timedelta
+from flask import Flask
+import threading
 
 # ═══════════════════════════════════════════════════════════
 #  ⚙️  تنظیمات اصلی
@@ -15,6 +17,18 @@ TELEGRAM_CHAT_ID   = "7343350447"
 OPENROUTER_API_KEY = "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"
 TELEGRAM_API_BASE  = "https://morning-tooth-e39a.mortzapakdel85.workers.dev"
 SENT_CACHE_FILE    = "sent_news.json"
+
+# ═══════════════════════════════════════════════════════════
+#  🌐  سرور وب (برای Render)
+# ═══════════════════════════════════════════════════════════
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Gold News Bot is running!"
+
+def run_flask():
+    app.run(host='0.0.0.0', port=10000)
 
 # ═══════════════════════════════════════════════════════════
 #  🧠  پرامپت اخبار
@@ -362,7 +376,7 @@ def send_long_message(text):
     return success
 
 # ═══════════════════════════════════════════════════════════
-#  🚀  اجرای اصلی (با حلقه بی‌نهایت برای Render)
+#  🚀  اجرای اصلی
 # ═══════════════════════════════════════════════════════════
 
 def run():
@@ -475,10 +489,16 @@ def run():
         print("  ❌  ارسال ناموفق.")
 
 # ═══════════════════════════════════════════════════════════
-#  🚀  نقطه شروع با حلقه بی‌نهایت (برای Render)
+#  🚀  نقطه شروع
 # ═══════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
+    # اجرای ربات در یک رشته (Thread) جداگانه
+    thread = threading.Thread(target=run_flask)
+    thread.daemon = True
+    thread.start()
+    
+    # اجرای ربات اصلی
     print("=" * 45)
     print("   🤖  ربات اخبار طلا — نسخه Render (۴ ساعته)")
     print("=" * 45)
