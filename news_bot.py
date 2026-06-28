@@ -34,18 +34,8 @@ def run_flask():
     app.run(host='0.0.0.0', port=10000)
 
 # ═══════════════════════════════════════════════════════════
-#  🤖  راه‌اندازی ربات تلگرام (نسخه سازگار)
+#  💬  گفتگو با هوش مصنوعی
 # ═══════════════════════════════════════════════════════════
-
-# ایجاد شیء Application با مدیریت خطا
-try:
-    telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-except Exception as e:
-    print(f"⚠️ خطا در ساختن Application: {e}")
-    # راه‌اندازی با روش جایگزین
-    from telegram.ext import Updater
-    updater = Updater(token=TELEGRAM_BOT_TOKEN)
-    telegram_app = Application(updater=updater)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """پاسخ به پیام‌های کاربر با هوش مصنوعی"""
@@ -87,23 +77,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ خطا: {str(e)}")
 
 def run_telegram_bot():
-    """اجرای ربات در حالت Polling با مدیریت خطا"""
+    """اجرای ربات در حالت Polling برای دریافت پیام‌ها"""
     try:
-        # روش اول: استفاده از Application
+        # ساخت Application با نسخه ۲۰
+        telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
         telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        print("🤖 ربات گفتگو روشن شد!")
         telegram_app.run_polling()
     except Exception as e:
-        print(f"⚠️ خطا در اجرای پولینگ: {e}")
-        # روش جایگزین: استفاده از Updater
-        try:
-            from telegram.ext import Updater
-            updater = Updater(token=TELEGRAM_BOT_TOKEN)
-            dp = updater.dispatcher
-            dp.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-            updater.start_polling()
-            updater.idle()
-        except Exception as e2:
-            print(f"❌ خطا در روش جایگزین: {e2}")
+        print(f"⚠️ خطا در اجرای گفتگو: {e}")
 
 # ═══════════════════════════════════════════════════════════
 #  🧠  پرامپت اخبار
@@ -588,7 +570,7 @@ if __name__ == "__main__":
     flask_thread.daemon = True
     flask_thread.start()
     
-    # ۲. اجرای ربات تلگرام برای دریافت پیام‌ها (Polling)
+    # ۲. اجرای ربات گفتگو در یک ترد جداگانه
     bot_thread = threading.Thread(target=run_telegram_bot)
     bot_thread.daemon = True
     bot_thread.start()
