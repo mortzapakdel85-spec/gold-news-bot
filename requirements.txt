@@ -2,4 +2,4 @@ requests
 feedparser
 schedule
 flask
-python-telegram-bot==20.7
+python-telegram-bot>=20.0
