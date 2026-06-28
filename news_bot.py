@@ -8,6 +8,8 @@ import os
 from datetime import datetime, timezone, timedelta
 from flask import Flask
 import threading
+from telegram import Update
+from telegram.ext import Application, MessageHandler, filters, ContextTypes
 
 # ═══════════════════════════════════════════════════════════
 #  ⚙️  تنظیمات اصلی
@@ -31,7 +33,60 @@ def run_flask():
     app.run(host='0.0.0.0', port=10000)
 
 # ═══════════════════════════════════════════════════════════
-#  🧠  پرامپت اخبار (نسخه نهایی)
+#  🤖  راه‌اندازی ربات تلگرام برای دریافت پیام‌ها
+# ═══════════════════════════════════════════════════════════
+
+# یک شیء Application برای ربات تلگرام (برای دریافت پیام)
+telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """پاسخ به پیام‌های کاربر با هوش مصنوعی"""
+    user_message = update.message.text
+    chat_id = update.effective_chat.id
+
+    # فقط به پیام‌های خودت پاسخ بده
+    if str(chat_id) != TELEGRAM_CHAT_ID:
+        await update.message.reply_text("⛔ شما دسترسی ندارید.")
+        return
+
+    # پیام کوتاه یا فرمان خاص
+    if not user_message:
+        await update.message.reply_text("لطفاً یک متن بنویسید.")
+        return
+
+    # ساخت پرامپت برای هوش مصنوعی
+    prompt = f"""
+    تو یک دستیار تحلیلگر حرفه‌ای بازار طلا (XAUUSD) هستی.
+    کاربر سوالی پرسیده یا درخواست تحلیل داده است.
+    با توجه به دانش اقتصادی و بازار طلا، پاسخ بده.
+
+    سوال کاربر:
+    {user_message}
+
+    پاسخ باید:
+    - به فارسی باشد
+    - مختصر و مفید باشد
+    - در حد ۳ تا ۵ جمله
+    - اگر مربوط به طلاست، جهت صعودی/نزولی رو مشخص کن
+    """
+
+    try:
+        # ارسال به OpenRouter
+        response = call_ai(prompt, max_tokens=2000)
+        if response:
+            await update.message.reply_text(response)
+        else:
+            await update.message.reply_text("❌ خطا در ارتباط با هوش مصنوعی. لطفاً دوباره تلاش کن.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ خطا: {str(e)}")
+
+def run_telegram_bot():
+    """اجرای ربات در حالت Polling برای دریافت پیام‌ها"""
+    telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    telegram_app.run_polling()
+
+# ═══════════════════════════════════════════════════════════
+#  🧠  پرامپت اخبار (همون قبلی)
 # ═══════════════════════════════════════════════════════════
 NEWS_PROMPT = """
 ⚠️ **توجه: تمام خروجی‌های این پرامپت باید به زبان فارسی باشد.**
@@ -68,7 +123,7 @@ NEWS_PROMPT = """
 """
 
 # ═══════════════════════════════════════════════════════════
-#  📡  منابع خبری
+#  📡  منابع خبری (همون قبلی)
 # ═══════════════════════════════════════════════════════════
 RSS_FEEDS = {
     "BBC World"            : "http://feeds.bbci.co.uk/news/world/rss.xml",
@@ -90,7 +145,7 @@ RSS_FEEDS = {
 }
 
 # ═══════════════════════════════════════════════════════════
-#  📂  کش اخبار قبلی
+#  📂  کش اخبار قبلی (همون قبلی)
 # ═══════════════════════════════════════════════════════════
 
 def load_sent_cache():
@@ -107,7 +162,7 @@ def save_sent_cache(cache):
         json.dump(list(cache)[-1000:], f, ensure_ascii=False)
 
 # ═══════════════════════════════════════════════════════════
-#  📰  دریافت اخبار RSS
+#  📰  دریافت اخبار RSS (همون قبلی)
 # ═══════════════════════════════════════════════════════════
 
 def get_all_articles():
@@ -141,7 +196,7 @@ def filter_new_articles(articles, sent_cache):
     return [a for a in articles if a['title'] not in sent_cache]
 
 # ═══════════════════════════════════════════════════════════
-#  📅  تقویم اقتصادی
+#  📅  تقویم اقتصادی (همون قبلی)
 # ═══════════════════════════════════════════════════════════
 
 def get_economic_calendar():
@@ -187,7 +242,7 @@ def get_economic_calendar():
         return []
 
 # ═══════════════════════════════════════════════════════════
-#  🤖  پردازش با OpenRouter
+#  🤖  پردازش با OpenRouter (همون قبلی)
 # ═══════════════════════════════════════════════════════════
 
 def call_ai(prompt, max_tokens=6000):
@@ -348,7 +403,7 @@ def ai_analyze_calendar(events):
     return None
 
 # ═══════════════════════════════════════════════════════════
-#  📤  ارسال تلگرام
+#  📤  ارسال تلگرام (همون قبلی)
 # ═══════════════════════════════════════════════════════════
 
 def send_telegram(text):
@@ -504,18 +559,23 @@ def run():
         print("  ❌  ارسال ناموفق.")
 
 # ═══════════════════════════════════════════════════════════
-#  🚀  نقطه شروع
+#  🚀  نقطه شروع (اجرای همزمان Flask + Polling + Schedule)
 # ═══════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    # اجرای ربات در یک رشته (Thread) جداگانه
-    thread = threading.Thread(target=run_flask)
-    thread.daemon = True
-    thread.start()
+    # ۱. اجرای Flask برای Render (بیدار نگه‌داشتن)
+    flask_thread = threading.Thread(target=run_flask)
+    flask_thread.daemon = True
+    flask_thread.start()
     
-    # اجرای ربات اصلی
+    # ۲. اجرای ربات تلگرام برای دریافت پیام‌ها (Polling)
+    bot_thread = threading.Thread(target=run_telegram_bot)
+    bot_thread.daemon = True
+    bot_thread.start()
+    
+    # ۳. اجرای ربات اصلی (ارسال خودکار اخبار)
     print("=" * 45)
-    print("   🤖  ربات اخبار طلا — نسخه نهایی (۴ ساعته)")
+    print("   🤖  ربات اخبار طلا — نسخه گفتگو (۴ ساعته)")
     print("=" * 45)
 
     # اجرای اولیه
@@ -526,6 +586,7 @@ if __name__ == "__main__":
 
     print("\n⏰  هر ۴ ساعت یک‌بار | Ctrl+C برای خروج\n")
     print("🟢 ربات در حال اجراست...")
+    print("💬 می‌توانید در تلگرام سوال بپرسید.")
 
     # حلقه بی‌نهایت برای نگه‌داشتن ربات روشن
     try:
