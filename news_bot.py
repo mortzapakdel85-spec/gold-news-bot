@@ -5,6 +5,7 @@ import time
 import json
 import re
 import os
+import sys
 from datetime import datetime, timezone, timedelta
 from flask import Flask
 import threading
@@ -33,11 +34,18 @@ def run_flask():
     app.run(host='0.0.0.0', port=10000)
 
 # ═══════════════════════════════════════════════════════════
-#  🤖  راه‌اندازی ربات تلگرام برای دریافت پیام‌ها
+#  🤖  راه‌اندازی ربات تلگرام (نسخه سازگار)
 # ═══════════════════════════════════════════════════════════
 
-# یک شیء Application برای ربات تلگرام (برای دریافت پیام)
-telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+# ایجاد شیء Application با مدیریت خطا
+try:
+    telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+except Exception as e:
+    print(f"⚠️ خطا در ساختن Application: {e}")
+    # راه‌اندازی با روش جایگزین
+    from telegram.ext import Updater
+    updater = Updater(token=TELEGRAM_BOT_TOKEN)
+    telegram_app = Application(updater=updater)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """پاسخ به پیام‌های کاربر با هوش مصنوعی"""
@@ -49,7 +57,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ شما دسترسی ندارید.")
         return
 
-    # پیام کوتاه یا فرمان خاص
     if not user_message:
         await update.message.reply_text("لطفاً یک متن بنویسید.")
         return
@@ -71,7 +78,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
 
     try:
-        # ارسال به OpenRouter
         response = call_ai(prompt, max_tokens=2000)
         if response:
             await update.message.reply_text(response)
@@ -81,12 +87,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ خطا: {str(e)}")
 
 def run_telegram_bot():
-    """اجرای ربات در حالت Polling برای دریافت پیام‌ها"""
-    telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    telegram_app.run_polling()
+    """اجرای ربات در حالت Polling با مدیریت خطا"""
+    try:
+        # روش اول: استفاده از Application
+        telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        telegram_app.run_polling()
+    except Exception as e:
+        print(f"⚠️ خطا در اجرای پولینگ: {e}")
+        # روش جایگزین: استفاده از Updater
+        try:
+            from telegram.ext import Updater
+            updater = Updater(token=TELEGRAM_BOT_TOKEN)
+            dp = updater.dispatcher
+            dp.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+            updater.start_polling()
+            updater.idle()
+        except Exception as e2:
+            print(f"❌ خطا در روش جایگزین: {e2}")
 
 # ═══════════════════════════════════════════════════════════
-#  🧠  پرامپت اخبار (همون قبلی)
+#  🧠  پرامپت اخبار
 # ═══════════════════════════════════════════════════════════
 NEWS_PROMPT = """
 ⚠️ **توجه: تمام خروجی‌های این پرامپت باید به زبان فارسی باشد.**
@@ -123,7 +143,7 @@ NEWS_PROMPT = """
 """
 
 # ═══════════════════════════════════════════════════════════
-#  📡  منابع خبری (همون قبلی)
+#  📡  منابع خبری
 # ═══════════════════════════════════════════════════════════
 RSS_FEEDS = {
     "BBC World"            : "http://feeds.bbci.co.uk/news/world/rss.xml",
@@ -145,7 +165,7 @@ RSS_FEEDS = {
 }
 
 # ═══════════════════════════════════════════════════════════
-#  📂  کش اخبار قبلی (همون قبلی)
+#  📂  کش اخبار قبلی
 # ═══════════════════════════════════════════════════════════
 
 def load_sent_cache():
@@ -162,7 +182,7 @@ def save_sent_cache(cache):
         json.dump(list(cache)[-1000:], f, ensure_ascii=False)
 
 # ═══════════════════════════════════════════════════════════
-#  📰  دریافت اخبار RSS (همون قبلی)
+#  📰  دریافت اخبار RSS
 # ═══════════════════════════════════════════════════════════
 
 def get_all_articles():
@@ -196,7 +216,7 @@ def filter_new_articles(articles, sent_cache):
     return [a for a in articles if a['title'] not in sent_cache]
 
 # ═══════════════════════════════════════════════════════════
-#  📅  تقویم اقتصادی (همون قبلی)
+#  📅  تقویم اقتصادی
 # ═══════════════════════════════════════════════════════════
 
 def get_economic_calendar():
@@ -242,7 +262,7 @@ def get_economic_calendar():
         return []
 
 # ═══════════════════════════════════════════════════════════
-#  🤖  پردازش با OpenRouter (همون قبلی)
+#  🤖  پردازش با OpenRouter
 # ═══════════════════════════════════════════════════════════
 
 def call_ai(prompt, max_tokens=6000):
@@ -403,7 +423,7 @@ def ai_analyze_calendar(events):
     return None
 
 # ═══════════════════════════════════════════════════════════
-#  📤  ارسال تلگرام (همون قبلی)
+#  📤  ارسال تلگرام
 # ═══════════════════════════════════════════════════════════
 
 def send_telegram(text):
@@ -577,6 +597,7 @@ if __name__ == "__main__":
     print("=" * 45)
     print("   🤖  ربات اخبار طلا — نسخه گفتگو (۴ ساعته)")
     print("=" * 45)
+    print("🐍 Python version:", sys.version)
 
     # اجرای اولیه
     run()
