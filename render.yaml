@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: gold-news-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python news_bot.py
+    plan: free
