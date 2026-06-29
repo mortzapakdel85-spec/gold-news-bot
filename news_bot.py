@@ -17,14 +17,10 @@ TELEGRAM_CHAT_ID   = "7343350447"
 OPENROUTER_API_KEY = "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"
 TELEGRAM_API_BASE  = "https://morning-tooth-e39a.mortzapakdel85.workers.dev"
 SENT_CACHE_FILE    = "sent_news.json"
+SERPAPI_KEY        = "0fdc02509c76acf6d00cdd3d1a64265e25ab7d96d78b0878620551572bf8acb6"
 
 # ═══════════════════════════════════════════════════════════
-#  🔑  کلید جستجوی SerpApi (قبلاً اضافه شده)
-# ═══════════════════════════════════════════════════════════
-SERPAPI_KEY = "0fdc02509c76acf6d00cdd3d1a64265e25ab7d96d78b0878620551572bf8acb6"
-
-# ═══════════════════════════════════════════════════════════
-#  📦  متغیرهای سراسری برای ذخیره آخرین تحلیل
+#  📦  متغیرهای سراسری
 # ═══════════════════════════════════════════════════════════
 last_analysis = ""
 last_news_time = ""
@@ -41,7 +37,7 @@ def home():
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    """دریافت پیام و پاسخ با هوش مصنوعی + جستجوی وب (همیشه فعال)"""
+    """دریافت پیام و پاسخ با هوش مصنوعی + جستجوی وب"""
     global last_analysis, last_news_time, last_selected_news
     
     try:
@@ -52,23 +48,29 @@ def webhook():
         chat_id = data['message']['chat']['id']
         user_message = data['message'].get('text', '')
 
-        # فقط به پیام‌های خودت پاسخ بده
         if str(chat_id) != TELEGRAM_CHAT_ID:
             return "OK", 200
         if not user_message:
             return "OK", 200
 
-        # ── ۱. نمایش وضعیت "در حال تایپ" ──
+        # ── نمایش وضعیت ──
         send_chat_action(chat_id, "typing")
         
-        # ── ۲. جستجوی وب (همیشه انجام میشه) ──
+        # ── بررسی قیمت طلا ──
+        if "قیمت" in user_message and ("طلا" in user_message or "اونس" in user_message):
+            gold_price = get_gold_price()
+            if gold_price:
+                send_telegram_response(chat_id, gold_price)
+                return "OK", 200
+        
+        # ── جستجوی وب ──
         web_results = search_web(user_message)
         
-        # ── ۳. ساخت پرامپت با نتایج جستجو ──
+        # ── ساخت پرامپت ──
         context = ""
         if web_results:
             context = f"""
-نتایج جستجوی اخیر در وب برای سوال کاربر:
+نتایج جستجوی اخیر در وب:
 {web_results}
 """
         elif last_analysis:
@@ -78,89 +80,101 @@ def webhook():
 """
 
         prompt = f"""
-تو یک دستیار تحلیلگر حرفه‌ای بازار طلا (XAUUSD) هستی.
+تو یک دستیار تحلیلگر بازار طلا هستی.
 
 {context}
 
 سوال کاربر: {user_message}
 
-دستورات:
-- پاسخ را به فارسی و جامع بده
-- اگر نتایج جستجو موجود است، بر اساس آن‌ها پاسخ بده
-- اگر اطلاعات کافی نیست، از دانش عمومی خود استفاده کن
-- پاسخ را در ۵-۷ جمله خلاصه کن
+پاسخ به فارسی، جامع و مختصر (۳-۵ جمله).
 """
 
-        response = call_ai(prompt, max_tokens=1000)
+        response = call_ai(prompt, max_tokens=800)
         
-        # ── ۴. ارسال پاسخ ──
         if response:
             send_telegram_response(chat_id, response)
         else:
-            send_telegram_response(chat_id, "❌ خطا در دریافت پاسخ. لطفاً دوباره تلاش کن.")
+            send_telegram_response(chat_id, "❌ خطا. دوباره تلاش کن.")
 
         return "OK", 200
         
     except Exception as e:
-        print(f"⚠️ خطا در Webhook: {e}")
+        print(f"⚠️ خطا: {e}")
         return "OK", 200
 
 def send_chat_action(chat_id, action):
-    """ارسال وضعیت در حال تایپ به تلگرام"""
     url = f"{TELEGRAM_API_BASE}/bot{TELEGRAM_BOT_TOKEN}/sendChatAction"
     try:
         requests.post(url, json={'chat_id': chat_id, 'action': action}, timeout=5)
     except Exception as e:
-        print(f"⚠️ خطا در ارسال وضعیت: {e}")
+        print(f"⚠️ خطا: {e}")
 
 def send_telegram_response(chat_id, text):
-    """ارسال پاسخ به تلگرام از طریق Worker"""
     url = f"{TELEGRAM_API_BASE}/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     try:
-        requests.post(url, json={
-            'chat_id': chat_id,
-            'text': text,
-            'parse_mode': 'HTML'
-        }, timeout=10)
+        requests.post(url, json={'chat_id': chat_id, 'text': text, 'parse_mode': 'HTML'}, timeout=10)
     except Exception as e:
-        print(f"❌ خطا در ارسال پاسخ: {e}")
+        print(f"❌ خطا: {e}")
 
 def search_web(query):
-    """جستجوی وب با استفاده از SerpApi (همیشه فعال)"""
+    """جستجوی وب با SerpApi - با پشتیبانی از بخش‌های مختلف"""
     try:
         url = "https://serpapi.com/search"
         params = {
             "q": query,
             "api_key": SERPAPI_KEY,
             "engine": "google",
-            "hl": "fa",
+            "hl": "en",
             "gl": "us",
-            "num": 3
+            "num": 5
         }
         
         response = requests.get(url, params=params, timeout=15)
+        if not response.ok:
+            return None
+            
+        data = response.json()
+        results = []
+        
+        # ۱. answer_box
+        answer = data.get('answer_box', {})
+        if answer:
+            if answer.get('answer'):
+                return f"📌 {answer.get('answer')}"
+            elif answer.get('snippet'):
+                return f"📌 {answer.get('snippet')}"
+        
+        # ۲. knowledge_graph
+        kg = data.get('knowledge_graph', {})
+        if kg and kg.get('description'):
+            results.append(f"📊 {kg.get('title', '')}: {kg.get('description')}")
+        
+        # ۳. organic_results
+        for item in data.get('organic_results', [])[:3]:
+            title = item.get('title', '')
+            snippet = item.get('snippet', '')
+            if title and snippet:
+                results.append(f"• {title}\n  {snippet}")
+        
+        return "\n\n".join(results) if results else None
+        
+    except Exception as e:
+        print(f"⚠️ خطا در جستجو: {e}")
+        return None
+
+def get_gold_price():
+    """دریافت قیمت لحظه‌ای طلا از GoldAPI"""
+    try:
+        url = "https://www.gold-api.com/price/XAU"
+        response = requests.get(url, timeout=10)
         if response.ok:
             data = response.json()
-            results = []
-            
-            organic_results = data.get('organic_results', [])
-            for item in organic_results[:3]:
-                title = item.get('title', '')
-                snippet = item.get('snippet', '')
-                if title and snippet:
-                    results.append(f"• {title}\n  {snippet}")
-            
-            if results:
-                return "\n\n".join(results)
-            else:
-                answer = data.get('answer_box', {})
-                if answer and answer.get('answer'):
-                    return f"📌 {answer.get('answer')}"
-                
-        return None
+            price = data.get('price', '')
+            if price:
+                return f"💰 قیمت لحظه‌ای طلا: ${price} (هر اونس)"
     except Exception as e:
-        print(f"⚠️ خطا در جستجوی وب: {e}")
-        return None
+        print(f"⚠️ خطا در دریافت قیمت طلا: {e}")
+    return None
 
 # ═══════════════════════════════════════════════════════════
 #  🧠  پرامپت اخبار
@@ -519,7 +533,7 @@ def send_long_message(text):
     return success
 
 # ═══════════════════════════════════════════════════════════
-#  🚀  اجرای اصلی (با ارسال خودکار هر ۴ ساعت)
+#  🚀  اجرای اصلی
 # ═══════════════════════════════════════════════════════════
 
 def run():
@@ -554,7 +568,6 @@ def run():
         print("  🧠  AI در حال تحلیل تقویم... (درخواست ۲/۲)")
         calendar_analysis = ai_analyze_calendar(calendar_events)
 
-    # ── ذخیره آخرین تحلیل برای گفتگو ──
     if news_analysis:
         last_analysis = news_analysis
         last_news_time = datetime.now().strftime('%Y/%m/%d %H:%M')
@@ -648,7 +661,7 @@ def run():
 
 if __name__ == "__main__":
     print("=" * 45)
-    print("   🤖  ربات اخبار طلا — نسخه نهایی")
+    print("   🤖  ربات اخبار طلا — نسخه نهایی با جستجو")
     print("=" * 45)
     print("🐍 Python version:", sys.version)
 
@@ -665,16 +678,12 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"⚠️ خطا در تنظیم Webhook: {e}")
 
-    # اجرای اولیه
     run()
-
-    # برنامه‌ریزی برای اجرای هر ۴ ساعت
     schedule.every(4).hours.do(run)
 
     print("\n⏰  هر ۴ ساعت یک‌بار | Ctrl+C برای خروج\n")
     print("🟢 ربات در حال اجراست...")
-    print("💬 می‌توانید در تلگرام سوال بپرسید.")
     print("🔍 جستجوی وب با SerpApi فعال است.")
+    print("💰 قیمت طلا از GoldAPI دریافت میشود.")
 
-    # اجرای Flask
     app.run(host='0.0.0.0', port=10000)
