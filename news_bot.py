@@ -19,7 +19,7 @@ TELEGRAM_API_BASE  = "https://morning-tooth-e39a.mortzapakdel85.workers.dev"
 SENT_CACHE_FILE    = "sent_news.json"
 
 # ═══════════════════════════════════════════════════════════
-#  🔑  کلید جستجوی SerpApi
+#  🔑  کلید جستجوی SerpApi (قبلاً اضافه شده)
 # ═══════════════════════════════════════════════════════════
 SERPAPI_KEY = "0fdc02509c76acf6d00cdd3d1a64265e25ab7d96d78b0878620551572bf8acb6"
 
@@ -41,7 +41,7 @@ def home():
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    """دریافت پیام از تلگرام و پاسخ دادن با هوش مصنوعی + جستجو"""
+    """دریافت پیام و پاسخ با هوش مصنوعی + جستجوی وب (همیشه فعال)"""
     global last_analysis, last_news_time, last_selected_news
     
     try:
@@ -55,54 +55,45 @@ def webhook():
         # فقط به پیام‌های خودت پاسخ بده
         if str(chat_id) != TELEGRAM_CHAT_ID:
             return "OK", 200
-
         if not user_message:
             return "OK", 200
 
-        # ── ارسال وضعیت "در حال تایپ" ──
+        # ── ۱. نمایش وضعیت "در حال تایپ" ──
         send_chat_action(chat_id, "typing")
         
-        # ── ۱. ابتدا از هوش مصنوعی با دانش خودش بپرس ──
-        analysis_context = ""
-        if last_analysis:
-            analysis_context = f"""
-آخرین تحلیل بازار (به‌روز شده در {last_news_time}):
-{last_analysis[:1500]}
+        # ── ۲. جستجوی وب (همیشه انجام میشه) ──
+        web_results = search_web(user_message)
+        
+        # ── ۳. ساخت پرامپت با نتایج جستجو ──
+        context = ""
+        if web_results:
+            context = f"""
+نتایج جستجوی اخیر در وب برای سوال کاربر:
+{web_results}
 """
-        else:
-            analysis_context = "هنوز تحلیل‌های بازار موجود نیست."
+        elif last_analysis:
+            context = f"""
+آخرین تحلیل بازار (به‌روز شده در {last_news_time}):
+{last_analysis[:1000]}
+"""
 
         prompt = f"""
 تو یک دستیار تحلیلگر حرفه‌ای بازار طلا (XAUUSD) هستی.
 
-{analysis_context}
+{context}
 
 سوال کاربر: {user_message}
 
 دستورات:
 - پاسخ را به فارسی و جامع بده
-- اگر سوال درباره چشم‌انداز آینده یا تحلیل لحظه‌ای است، از آخرین تحلیل استفاده کن
-- اگر اطلاعات کافی نیست، بگو "اطلاعات کافی ندارم" 
-- پاسخ را در ۳-۵ جمله خلاصه کن
+- اگر نتایج جستجو موجود است، بر اساس آن‌ها پاسخ بده
+- اگر اطلاعات کافی نیست، از دانش عمومی خود استفاده کن
+- پاسخ را در ۵-۷ جمله خلاصه کن
 """
 
-        response = call_ai(prompt, max_tokens=800)
+        response = call_ai(prompt, max_tokens=1000)
         
-        # ── ۲. اگر پاسخ ضعیف بود یا کافی نبود، از جستجو استفاده کن ──
-        if not response or len(response) < 20 or "اطلاعات کافی ندارم" in response:
-            web_results = search_web(user_message)
-            if web_results:
-                # پاسخ با اطلاعات جستجو
-                search_prompt = f"""
-سوال کاربر: {user_message}
-
-نتایج جستجوی اخیر در وب:
-{web_results}
-
-بر اساس این نتایج، یک پاسخ کامل و به‌روز به فارسی بنویس.
-"""
-                response = call_ai(search_prompt, max_tokens=800)
-        
+        # ── ۴. ارسال پاسخ ──
         if response:
             send_telegram_response(chat_id, response)
         else:
@@ -135,9 +126,8 @@ def send_telegram_response(chat_id, text):
         print(f"❌ خطا در ارسال پاسخ: {e}")
 
 def search_web(query):
-    """جستجوی وب با استفاده از SerpApi"""
+    """جستجوی وب با استفاده از SerpApi (همیشه فعال)"""
     try:
-        # استفاده مستقیم از API SerpApi
         url = "https://serpapi.com/search"
         params = {
             "q": query,
@@ -145,7 +135,7 @@ def search_web(query):
             "engine": "google",
             "hl": "fa",
             "gl": "us",
-            "num": 3  # تعداد نتایج
+            "num": 3
         }
         
         response = requests.get(url, params=params, timeout=15)
@@ -153,7 +143,6 @@ def search_web(query):
             data = response.json()
             results = []
             
-            # استخراج نتایج از پاسخ
             organic_results = data.get('organic_results', [])
             for item in organic_results[:3]:
                 title = item.get('title', '')
@@ -164,7 +153,6 @@ def search_web(query):
             if results:
                 return "\n\n".join(results)
             else:
-                # اگر نتیجه‌ای نبود، از بخش answer_box استفاده کن
                 answer = data.get('answer_box', {})
                 if answer and answer.get('answer'):
                     return f"📌 {answer.get('answer')}"
@@ -175,7 +163,7 @@ def search_web(query):
         return None
 
 # ═══════════════════════════════════════════════════════════
-#  🧠  پرامپت اخبار (نسخه قبلی)
+#  🧠  پرامپت اخبار
 # ═══════════════════════════════════════════════════════════
 NEWS_PROMPT = """
 من یک معامله‌گر حرفه‌ای طلا (XAUUSD) با رویکرد فاندامنتال هستم.
@@ -208,7 +196,7 @@ NEWS_PROMPT = """
 """
 
 # ═══════════════════════════════════════════════════════════
-#  📡  منابع خبری (بدون تغییر)
+#  📡  منابع خبری
 # ═══════════════════════════════════════════════════════════
 RSS_FEEDS = {
     "BBC World"            : "http://feeds.bbci.co.uk/news/world/rss.xml",
@@ -531,7 +519,7 @@ def send_long_message(text):
     return success
 
 # ═══════════════════════════════════════════════════════════
-#  🚀  اجرای اصلی
+#  🚀  اجرای اصلی (با ارسال خودکار هر ۴ ساعت)
 # ═══════════════════════════════════════════════════════════
 
 def run():
@@ -660,7 +648,7 @@ def run():
 
 if __name__ == "__main__":
     print("=" * 45)
-    print("   🤖  ربات اخبار طلا — نسخه نهایی با جستجوی وب")
+    print("   🤖  ربات اخبار طلا — نسخه نهایی")
     print("=" * 45)
     print("🐍 Python version:", sys.version)
 
