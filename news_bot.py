@@ -19,7 +19,19 @@ TELEGRAM_API_BASE  = "https://morning-tooth-e39a.mortzapakdel85.workers.dev"
 SENT_CACHE_FILE    = "sent_news.json"
 
 # ═══════════════════════════════════════════════════════════
-#  🌐  سرور Flask (برای Webhook + بیدار نگه‌داشتن)
+#  🔑  کلید جستجوی SerpApi
+# ═══════════════════════════════════════════════════════════
+SERPAPI_KEY = "0fdc02509c76acf6d00cdd3d1a64265e25ab7d96d78b0878620551572bf8acb6"
+
+# ═══════════════════════════════════════════════════════════
+#  📦  متغیرهای سراسری برای ذخیره آخرین تحلیل
+# ═══════════════════════════════════════════════════════════
+last_analysis = ""
+last_news_time = ""
+last_selected_news = []
+
+# ═══════════════════════════════════════════════════════════
+#  🌐  سرور Flask
 # ═══════════════════════════════════════════════════════════
 app = Flask(__name__)
 
@@ -29,7 +41,9 @@ def home():
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    """دریافت پیام از تلگرام و پاسخ دادن با هوش مصنوعی"""
+    """دریافت پیام از تلگرام و پاسخ دادن با هوش مصنوعی + جستجو"""
+    global last_analysis, last_news_time, last_selected_news
+    
     try:
         data = request.get_json()
         if not data or 'message' not in data:
@@ -45,27 +59,68 @@ def webhook():
         if not user_message:
             return "OK", 200
 
-        # پرامپت برای گفتگو
-        prompt = f"""
-        تو یک دستیار تحلیلگر حرفه‌ای بازار طلا (XAUUSD) هستی.
-        سوال کاربر: {user_message}
-        پاسخ باید:
-        - به فارسی باشد
-        - کامل و جامع باشد
-        - اگر مربوط به طلاست، جهت صعودی/نزولی رو مشخص کن
-        - در حد ۵ تا ۷ جمله
-        """
+        # ── ارسال وضعیت "در حال تایپ" ──
+        send_chat_action(chat_id, "typing")
+        
+        # ── ۱. ابتدا از هوش مصنوعی با دانش خودش بپرس ──
+        analysis_context = ""
+        if last_analysis:
+            analysis_context = f"""
+آخرین تحلیل بازار (به‌روز شده در {last_news_time}):
+{last_analysis[:1500]}
+"""
+        else:
+            analysis_context = "هنوز تحلیل‌های بازار موجود نیست."
 
-        response = call_ai(prompt, max_tokens=1000)
+        prompt = f"""
+تو یک دستیار تحلیلگر حرفه‌ای بازار طلا (XAUUSD) هستی.
+
+{analysis_context}
+
+سوال کاربر: {user_message}
+
+دستورات:
+- پاسخ را به فارسی و جامع بده
+- اگر سوال درباره چشم‌انداز آینده یا تحلیل لحظه‌ای است، از آخرین تحلیل استفاده کن
+- اگر اطلاعات کافی نیست، بگو "اطلاعات کافی ندارم" 
+- پاسخ را در ۳-۵ جمله خلاصه کن
+"""
+
+        response = call_ai(prompt, max_tokens=800)
+        
+        # ── ۲. اگر پاسخ ضعیف بود یا کافی نبود، از جستجو استفاده کن ──
+        if not response or len(response) < 20 or "اطلاعات کافی ندارم" in response:
+            web_results = search_web(user_message)
+            if web_results:
+                # پاسخ با اطلاعات جستجو
+                search_prompt = f"""
+سوال کاربر: {user_message}
+
+نتایج جستجوی اخیر در وب:
+{web_results}
+
+بر اساس این نتایج، یک پاسخ کامل و به‌روز به فارسی بنویس.
+"""
+                response = call_ai(search_prompt, max_tokens=800)
+        
         if response:
             send_telegram_response(chat_id, response)
         else:
-            send_telegram_response(chat_id, "❌ خطا در ارتباط با هوش مصنوعی.")
+            send_telegram_response(chat_id, "❌ خطا در دریافت پاسخ. لطفاً دوباره تلاش کن.")
 
         return "OK", 200
+        
     except Exception as e:
         print(f"⚠️ خطا در Webhook: {e}")
         return "OK", 200
+
+def send_chat_action(chat_id, action):
+    """ارسال وضعیت در حال تایپ به تلگرام"""
+    url = f"{TELEGRAM_API_BASE}/bot{TELEGRAM_BOT_TOKEN}/sendChatAction"
+    try:
+        requests.post(url, json={'chat_id': chat_id, 'action': action}, timeout=5)
+    except Exception as e:
+        print(f"⚠️ خطا در ارسال وضعیت: {e}")
 
 def send_telegram_response(chat_id, text):
     """ارسال پاسخ به تلگرام از طریق Worker"""
@@ -79,8 +134,48 @@ def send_telegram_response(chat_id, text):
     except Exception as e:
         print(f"❌ خطا در ارسال پاسخ: {e}")
 
+def search_web(query):
+    """جستجوی وب با استفاده از SerpApi"""
+    try:
+        # استفاده مستقیم از API SerpApi
+        url = "https://serpapi.com/search"
+        params = {
+            "q": query,
+            "api_key": SERPAPI_KEY,
+            "engine": "google",
+            "hl": "fa",
+            "gl": "us",
+            "num": 3  # تعداد نتایج
+        }
+        
+        response = requests.get(url, params=params, timeout=15)
+        if response.ok:
+            data = response.json()
+            results = []
+            
+            # استخراج نتایج از پاسخ
+            organic_results = data.get('organic_results', [])
+            for item in organic_results[:3]:
+                title = item.get('title', '')
+                snippet = item.get('snippet', '')
+                if title and snippet:
+                    results.append(f"• {title}\n  {snippet}")
+            
+            if results:
+                return "\n\n".join(results)
+            else:
+                # اگر نتیجه‌ای نبود، از بخش answer_box استفاده کن
+                answer = data.get('answer_box', {})
+                if answer and answer.get('answer'):
+                    return f"📌 {answer.get('answer')}"
+                
+        return None
+    except Exception as e:
+        print(f"⚠️ خطا در جستجوی وب: {e}")
+        return None
+
 # ═══════════════════════════════════════════════════════════
-#  🧠  پرامپت اخبار (نسخه قبلی که خوب کار میکرد)
+#  🧠  پرامپت اخبار (نسخه قبلی)
 # ═══════════════════════════════════════════════════════════
 NEWS_PROMPT = """
 من یک معامله‌گر حرفه‌ای طلا (XAUUSD) با رویکرد فاندامنتال هستم.
@@ -113,7 +208,7 @@ NEWS_PROMPT = """
 """
 
 # ═══════════════════════════════════════════════════════════
-#  📡  منابع خبری
+#  📡  منابع خبری (بدون تغییر)
 # ═══════════════════════════════════════════════════════════
 RSS_FEEDS = {
     "BBC World"            : "http://feeds.bbci.co.uk/news/world/rss.xml",
@@ -440,6 +535,8 @@ def send_long_message(text):
 # ═══════════════════════════════════════════════════════════
 
 def run():
+    global last_analysis, last_news_time, last_selected_news
+    
     print(f"\n{'═'*45}")
     print(f"  [{datetime.now().strftime('%H:%M:%S')}]  شروع اجرا")
     print(f"{'═'*45}")
@@ -468,6 +565,15 @@ def run():
     if calendar_events:
         print("  🧠  AI در حال تحلیل تقویم... (درخواست ۲/۲)")
         calendar_analysis = ai_analyze_calendar(calendar_events)
+
+    # ── ذخیره آخرین تحلیل برای گفتگو ──
+    if news_analysis:
+        last_analysis = news_analysis
+        last_news_time = datetime.now().strftime('%Y/%m/%d %H:%M')
+        last_selected_news = selected
+        print(f"  📝  تحلیل ذخیره شد برای گفتگو")
+    else:
+        print("  ℹ️  تحلیلی برای ذخیره وجود ندارد")
 
     if not selected and not calendar_events:
         print("  ℹ️   هیچ محتوایی برای ارسال نیست")
@@ -549,16 +655,16 @@ def run():
         print("  ❌  ارسال ناموفق.")
 
 # ═══════════════════════════════════════════════════════════
-#  🚀  نقطه شروع (تنظیم Webhook و اجرای Flask)
+#  🚀  نقطه شروع
 # ═══════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
     print("=" * 45)
-    print("   🤖  ربات اخبار طلا — نسخه نهایی (Webhook)")
+    print("   🤖  ربات اخبار طلا — نسخه نهایی با جستجوی وب")
     print("=" * 45)
     print("🐍 Python version:", sys.version)
 
-    # تنظیم Webhook برای دریافت پیام‌ها
+    # تنظیم Webhook
     webhook_url = "https://gold-news-bot-rwg4.onrender.com/webhook"
     set_webhook_url = f"{TELEGRAM_API_BASE}/bot{TELEGRAM_BOT_TOKEN}/setWebhook?url={webhook_url}"
     
@@ -579,7 +685,8 @@ if __name__ == "__main__":
 
     print("\n⏰  هر ۴ ساعت یک‌بار | Ctrl+C برای خروج\n")
     print("🟢 ربات در حال اجراست...")
-    print("💬 می‌توانید در تلگرام سوال بپرسید (Webhook فعال است).")
+    print("💬 می‌توانید در تلگرام سوال بپرسید.")
+    print("🔍 جستجوی وب با SerpApi فعال است.")
 
     # اجرای Flask
     app.run(host='0.0.0.0', port=10000)
