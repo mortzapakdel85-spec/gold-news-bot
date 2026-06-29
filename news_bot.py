@@ -37,9 +37,6 @@ def home():
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    """دریافت پیام و پاسخ با هوش مصنوعی + جستجوی وب"""
-    global last_analysis, last_news_time, last_selected_news
-    
     try:
         data = request.get_json()
         if not data or 'message' not in data:
@@ -53,103 +50,79 @@ def webhook():
         if not user_message:
             return "OK", 200
 
-        # ── نمایش وضعیت ──
         send_chat_action(chat_id, "typing")
         
-        # ── بررسی قیمت طلا ──
+        # ── قیمت طلا ──
         if "قیمت" in user_message and ("طلا" in user_message or "اونس" in user_message):
             gold_price = get_gold_price()
             if gold_price:
                 send_telegram_response(chat_id, gold_price)
                 return "OK", 200
         
-        # ── جستجوی وب ──
+        # ── جستجو ──
         web_results = search_web(user_message)
         
-        # ── ساخت پرامپت ──
         context = ""
         if web_results:
-            context = f"""
-نتایج جستجوی اخیر در وب:
-{web_results}
-"""
+            context = f"نتایج جستجو:\n{web_results}"
         elif last_analysis:
-            context = f"""
-آخرین تحلیل بازار (به‌روز شده در {last_news_time}):
-{last_analysis[:1000]}
-"""
+            context = f"آخرین تحلیل (به‌روز {last_news_time}):\n{last_analysis[:800]}"
 
         prompt = f"""
-تو یک دستیار تحلیلگر بازار طلا هستی.
+تو دستیار تحلیلگر بازار طلا هستی.
 
 {context}
 
-سوال کاربر: {user_message}
+سوال: {user_message}
 
-پاسخ به فارسی، جامع و مختصر (۳-۵ جمله).
+پاسخ مختصر و مفید به فارسی (۳-۵ جمله).
 """
-
         response = call_ai(prompt, max_tokens=800)
-        
-        if response:
-            send_telegram_response(chat_id, response)
-        else:
-            send_telegram_response(chat_id, "❌ خطا. دوباره تلاش کن.")
-
+        send_telegram_response(chat_id, response or "❌ خطا. دوباره تلاش کن.")
         return "OK", 200
         
     except Exception as e:
         print(f"⚠️ خطا: {e}")
         return "OK", 200
 
+# ── توابع کمکی ──
 def send_chat_action(chat_id, action):
     url = f"{TELEGRAM_API_BASE}/bot{TELEGRAM_BOT_TOKEN}/sendChatAction"
     try:
         requests.post(url, json={'chat_id': chat_id, 'action': action}, timeout=5)
     except Exception as e:
-        print(f"⚠️ خطا: {e}")
+        print(f"⚠️ {e}")
 
 def send_telegram_response(chat_id, text):
     url = f"{TELEGRAM_API_BASE}/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     try:
         requests.post(url, json={'chat_id': chat_id, 'text': text, 'parse_mode': 'HTML'}, timeout=10)
     except Exception as e:
-        print(f"❌ خطا: {e}")
+        print(f"❌ {e}")
 
 def search_web(query):
-    """جستجوی وب با SerpApi - با پشتیبانی از بخش‌های مختلف"""
     try:
         url = "https://serpapi.com/search"
-        params = {
-            "q": query,
-            "api_key": SERPAPI_KEY,
-            "engine": "google",
-            "hl": "en",
-            "gl": "us",
-            "num": 5
-        }
-        
+        params = {"q": query, "api_key": SERPAPI_KEY, "engine": "google", "hl": "en", "gl": "us", "num": 3}
         response = requests.get(url, params=params, timeout=15)
         if not response.ok:
             return None
-            
         data = response.json()
         results = []
         
-        # ۱. answer_box
+        # answer_box
         answer = data.get('answer_box', {})
-        if answer:
-            if answer.get('answer'):
-                return f"📌 {answer.get('answer')}"
-            elif answer.get('snippet'):
-                return f"📌 {answer.get('snippet')}"
+        if answer.get('answer'):
+            return f"📌 {answer.get('answer')}"
+        if answer.get('snippet'):
+            return f"📌 {answer.get('snippet')}"
         
-        # ۲. knowledge_graph
+        # knowledge_graph
         kg = data.get('knowledge_graph', {})
-        if kg and kg.get('description'):
+        if kg.get('description'):
             results.append(f"📊 {kg.get('title', '')}: {kg.get('description')}")
         
-        # ۳. organic_results
+        # organic_results
         for item in data.get('organic_results', [])[:3]:
             title = item.get('title', '')
             snippet = item.get('snippet', '')
@@ -157,13 +130,11 @@ def search_web(query):
                 results.append(f"• {title}\n  {snippet}")
         
         return "\n\n".join(results) if results else None
-        
     except Exception as e:
-        print(f"⚠️ خطا در جستجو: {e}")
+        print(f"⚠️ {e}")
         return None
 
 def get_gold_price():
-    """دریافت قیمت لحظه‌ای طلا از GoldAPI"""
     try:
         url = "https://www.gold-api.com/price/XAU"
         response = requests.get(url, timeout=10)
@@ -173,40 +144,32 @@ def get_gold_price():
             if price:
                 return f"💰 قیمت لحظه‌ای طلا: ${price} (هر اونس)"
     except Exception as e:
-        print(f"⚠️ خطا در دریافت قیمت طلا: {e}")
+        print(f"⚠️ {e}")
     return None
 
 # ═══════════════════════════════════════════════════════════
-#  🧠  پرامپت اخبار
+#  🧠  پرامپت اخبار (اصلاح‌شده و قوی)
 # ═══════════════════════════════════════════════════════════
 NEWS_PROMPT = """
-من یک معامله‌گر حرفه‌ای طلا (XAUUSD) با رویکرد فاندامنتال هستم.
+⚠️ **دستور اکید: فقط اخبار مرتبط با بازار طلا را انتخاب کن!**
 
-موضوعات مهم:
-
-🏦 فدرال رزرو و اقتصاد آمریکا (بالاترین اولویت):
-- نرخ بهره فدرال رزرو، بیانیه‌ها، موضع اعضای FOMC
-- تورم: CPI، PPI، PCE
-- اشتغال: NFP، نرخ بیکاری، ADP، jobless claims
-- رشد اقتصادی: GDP، خرده‌فروشی، PMI
-- دلار آمریکا (DXY)
-
-🏦 سایر بانک‌های مرکزی:
-- ECB: نرخ بهره، تورم یورو
-- PBoC: سیاست پولی، یوان
-- BOJ، BOE، SNB: تصمیمات نرخ بهره
-
-🥇 بازار طلا:
-- تغییرات قیمت طلا
+✅ اخبار مرتبط:
+- فدرال رزرو، نرخ بهره، تورم (CPI, PPI, PCE)
+- اشتغال آمریکا (NFP، نرخ بیکاری)
+- رشد اقتصادی (GDP)
+- بانک‌های مرکزی (Fed, ECB, PBoC, BOJ, BOE)
+- تنش‌های ژئوپولیتیک (جنگ، تحریم، بحران) که بر طلا تأثیر می‌گذارند
 - خرید/فروش طلا توسط بانک‌های مرکزی
-- ETF طلا، ذخایر طلا
+- قیمت طلا و دلار آمریکا (DXY)
 
-🌍 ژئوپولیتیک:
-- درگیری‌های نظامی، تحریم، بحران
-- تنش‌های تجاری آمریکا-چین
-- هر رویداد که تقاضای safe haven را تغییر دهد
+❌ اخبار بی‌ربط (نادیده بگیر):
+- فوتبال، ورزش، سرگرمی، هنر
+- آب و هوا، گرمای هوا، زلزله (بدون تأثیر اقتصادی)
+- جنایت، تصادفات، حوادث محلی
+- سیاست داخلی کشورها (بدون تأثیر بر اقتصاد جهانی)
+- اخبار عادی و روزمره
 
-❌ بی‌ربط: ورزش، سرگرمی، سیاست داخلی بدون تاثیر اقتصادی
+از لیست زیر، فقط اخبار مرتبط با طلا و اقتصاد جهانی را انتخاب کن.
 """
 
 # ═══════════════════════════════════════════════════════════
@@ -369,48 +332,35 @@ def ai_process_news(articles):
     prompt = f"""
 {NEWS_PROMPT}
 
-⚠️ **دستور اکید و بسیار مهم:**
-- **تمامی متن‌های خروجی (عنوان، توضیحات، تحلیل) باید به زبان فارسی باشد.**
-- **حتماً برای هر خبر جهت صعودی، نزولی یا خنثی رو با دلیل مشخص کن.**
-- **اگر خبری می‌تونه هم صعودی و هم نزولی باشه، هر دو رو توضیح بده.**
-- **در تحلیل جامع، حتماً هم دلایل صعودی و هم دلایل نزولی را جداگانه بنویس.**
-
-از لیست اخبار زیر، **همه اخباری که مرتبط با حوزه‌های فوق هستند** را انتخاب کن.
-**محدودیت تعداد وجود ندارد** — هر تعداد که مرتبط بود، همه را انتخاب کن.
-**اخبار تکراری یا خیلی مشابه رو حذف کن و فقط یک بار بیار.**
-
-برای هر خبر انتخاب‌شده:
-۱. عنوان را به **فارسی روان** ترجمه کن
-۲. تاثیر دقیق روی **اقتصاد جهانی** و **قیمت طلا** را به **فارسی** توضیح بده
-۳. مشخص کن که این خبر برای طلا **صعودی** است، **نزولی** است یا **خنثی** — با دلیل به **فارسی**
-
-سپس یک **تحلیل جامع و متعادل** به **فارسی** بنویس که شامل:
-- وضعیت کلی بازار طلا بر اساس اخبار
-- **دلایل صعودی** (عوامل افزایش قیمت طلا)
-- **دلایل نزولی** (عوامل کاهش قیمت طلا)
-- مهم‌ترین ریسک‌ها و فرصت‌ها
-- دیدگاه طرف مخالف (چرا ممکن است برعکس شود؟)
-- توصیه عملی و معقول برای معامله‌گر طلا
-
-لیست اخبار:
+اخبار:
 {articles_text}
 
-**فقط JSON برگردان، هیچ توضیح اضافه‌ای نه. تمام متن‌ها به فارسی:**
+**فقط اخبار مرتبط با طلا و اقتصاد جهانی را انتخاب کن.**
+**اخبار بی‌ربط (فوتبال، آب‌وهوا، جنایت، هنر) را کاملاً نادیده بگیر.**
+
+برای هر خبر انتخاب‌شده:
+۱. عنوان را به فارسی ترجمه کن
+۲. تاثیر بر اقتصاد و طلا را توضیح بده
+۳. جهت (صعودی/نزولی/خنثی) را مشخص کن
+
+سپس یک تحلیل جامع و متعادل بنویس.
+
+فقط JSON:
 {{
   "selected": [
     {{
       "index": 1,
-      "title_fa": "ترجمه فارسی عنوان خبر",
-      "impact": "تاثیر این خبر روی اقتصاد جهانی و طلا به فارسی",
-      "direction": "صعودی/نزولی/خنثی — دلیل به فارسی"
+      "title_fa": "ترجمه فارسی",
+      "impact": "تاثیر بر اقتصاد و طلا",
+      "direction": "صعودی/نزولی/خنثی — دلیل"
     }}
   ],
-  "analysis": "تحلیل جامع بازار طلا به فارسی با ذکر دلایل صعودی و نزولی..."
+  "analysis": "تحلیل جامع..."
 }}
 """
-    response = call_ai(prompt, max_tokens=6000)
+    response = call_ai(prompt, max_tokens=4000)
     if not response:
-        return articles[:10], ''
+        return articles[:5], ''
 
     try:
         match = re.search(r'\{.*\}', response, re.DOTALL)
@@ -431,9 +381,9 @@ def ai_process_news(articles):
             return selected, analysis
     except Exception as e:
         print(f"   ⚠️  خطا در پردازش JSON اخبار: {e}")
-        return articles[:10], response[:2000] + "..."
+        return articles[:5], ''
 
-    return articles[:10], ''
+    return articles[:5], ''
 
 def ai_analyze_calendar(events):
     if not events:
@@ -451,33 +401,27 @@ def ai_analyze_calendar(events):
         events_text += f"[{country}][{impact}] {ev_time} | {title} | قبلی: {previous} | پیش‌بینی: {forecast} | واقعی: {actual}\n"
 
     prompt = f"""
-⚠️ **دستور اکید: تمام خروجی به زبان فارسی باشد.**
-
-من معامله‌گر طلا (XAUUSD) هستم.
-
-رویدادهای اقتصادی مهم امروز (با درجه اهمیت High و Medium):
+رویدادهای اقتصادی امروز:
 {events_text}
 
-برای **هر رویداد**:
-۱. جایگاه این داده در اقتصاد (آمریکا/اروپا/چین) را به **فارسی** توضیح بده
-۲. تاثیر مستقیم این داده بر قیمت طلا را به **فارسی** تحلیل کن (هم صعودی و هم نزولی)
-۳. اگر مقدار actual موجود است، آن را با forecast مقایسه کن و تفسیر کن که بهتر یا بدتر از پیش‌بینی بوده
-
-در آخر یک **جمع‌بندی کلی** به **فارسی** بنویس.
+برای هر رویداد:
+۱. جایگاه در اقتصاد
+۲. تاثیر بر طلا (صعودی/نزولی)
+۳. تفسیر actual vs forecast
 
 فقط JSON:
 {{
   "events": [
     {{
-      "title": "نام رویداد به فارسی",
-      "role": "جایگاه این نرخ در اقتصاد به فارسی",
-      "gold_impact": "تاثیر بر طلا به فارسی"
+      "title": "نام رویداد",
+      "role": "جایگاه در اقتصاد",
+      "gold_impact": "تاثیر بر طلا"
     }}
   ],
-  "summary": "جمع‌بندی کلی به فارسی..."
+  "summary": "جمع‌بندی"
 }}
 """
-    response = call_ai(prompt, max_tokens=2500)
+    response = call_ai(prompt, max_tokens=2000)
     if not response:
         return None
 
@@ -553,9 +497,9 @@ def run():
 
     selected, news_analysis = [], ''
     if new_articles:
-        print("  🧠  AI در حال تحلیل اخبار... (درخواست ۱/۲)")
+        print("  🧠  AI در حال تحلیل اخبار...")
         selected, news_analysis = ai_process_news(new_articles)
-        print(f"  ✔   {len(selected)} خبر انتخاب شد")
+        print(f"  ✔   {len(selected)} خبر مرتبط انتخاب شد")
     else:
         print("  ℹ️   همه اخبار قبلاً فرستاده شده‌اند")
 
@@ -565,7 +509,7 @@ def run():
 
     calendar_analysis = None
     if calendar_events:
-        print("  🧠  AI در حال تحلیل تقویم... (درخواست ۲/۲)")
+        print("  🧠  AI در حال تحلیل تقویم...")
         calendar_analysis = ai_analyze_calendar(calendar_events)
 
     if news_analysis:
@@ -661,7 +605,7 @@ def run():
 
 if __name__ == "__main__":
     print("=" * 45)
-    print("   🤖  ربات اخبار طلا — نسخه نهایی با جستجو")
+    print("   🤖  ربات اخبار طلا — نسخه نهایی")
     print("=" * 45)
     print("🐍 Python version:", sys.version)
 
